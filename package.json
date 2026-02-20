@@ -1,0 +1,21 @@
+{
+  "name": "obsidian-modular-templates",
+  "version": "1.0.0",
+  "description": "Composable templates with frontmatter includes, recursive merging, and cycle detection",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+  },
+  "keywords": ["obsidian", "plugin", "templates", "modular"],
+  "author": "Cody Bontecou",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^16.11.6",
+    "builtin-modules": "^3.3.0",
+    "esbuild": "0.17.3",
+    "obsidian": "latest",
+    "tslib": "2.4.0",
+    "typescript": "4.7.4"
+  }
+}

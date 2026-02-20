@@ -1,0 +1,9 @@
+{
+  "id": "obsidian-modular-templates",
+  "name": "Modular Templates",
+  "version": "1.0.0",
+  "minAppVersion": "0.15.0",
+  "description": "Composable templates with frontmatter includes, recursive merging, and cycle detection",
+  "author": "Cody Bontecou",
+  "isDesktopOnly": false
+}

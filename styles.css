@@ -1,1 +1,58 @@
-/* Modular Templates – no custom styles needed */
+/* Multi-select modal */
+.mt-multi-select h3 {
+	margin: 0 0 12px;
+	font-size: var(--font-ui-medium);
+}
+
+.mt-search {
+	width: 100%;
+	margin-bottom: 8px;
+	padding: 8px 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+}
+
+.mt-search:focus {
+	border-color: var(--interactive-accent);
+	outline: none;
+}
+
+.mt-list {
+	max-height: 300px;
+	overflow-y: auto;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	margin-bottom: 12px;
+}
+
+.mt-item {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 10px;
+	cursor: pointer;
+	user-select: none;
+}
+
+.mt-item:hover {
+	background: var(--background-modifier-hover);
+}
+
+.mt-item input[type="checkbox"] {
+	margin: 0;
+	flex-shrink: 0;
+}
+
+.mt-footer {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+}
+
+.mt-count {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}

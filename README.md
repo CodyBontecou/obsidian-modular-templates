@@ -37,6 +37,19 @@ type: book-note
 
 3. Use the command palette: **Insert modular template** or **Create note from modular template**.
 
+## Installation
+
+### From Community Plugins
+
+1. Open **Settings → Community Plugins → Browse**
+2. Search for "Modular Templates"
+3. Click **Install**, then **Enable**
+
+### Manual Installation
+
+1. Copy `main.js`, `manifest.json`, and `styles.css` into your vault's `.obsidian/plugins/obsidian-modular-templates/` directory.
+2. Enable the plugin in Obsidian's Community Plugins settings.
+
 ## Author
 
 Cody Bontecou

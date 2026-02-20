@@ -50,6 +50,11 @@ type: book-note
 1. Copy `main.js`, `manifest.json`, and `styles.css` into your vault's `.obsidian/plugins/obsidian-modular-templates/` directory.
 2. Enable the plugin in Obsidian's Community Plugins settings.
 
+
+## Inspiration
+
+This plugin was built in response to a request by u/sten_zer in [this Reddit thread](https://www.reddit.com/r/ObsidianMD/comments/1r8vw0w/anyone_have_a_plugin_request/) — composable, inheritable templates that avoid redundancy.
+
 ## Author
 
 Cody Bontecou

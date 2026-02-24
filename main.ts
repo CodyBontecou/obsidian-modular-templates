@@ -4,6 +4,7 @@ import {
 	FuzzySuggestModal,
 	MarkdownView,
 	Modal,
+	moment,
 	Notice,
 	Plugin,
 	PluginSettingTab,
@@ -25,6 +26,7 @@ interface ModularTemplatesSettings {
 	mergeStrategy: MergeStrategy;
 	dateFormat: string;
 	timeFormat: string;
+	debugMode: boolean;
 }
 
 const DEFAULT_SETTINGS: ModularTemplatesSettings = {
@@ -32,6 +34,7 @@ const DEFAULT_SETTINGS: ModularTemplatesSettings = {
 	mergeStrategy: "last-wins",
 	dateFormat: "YYYY-MM-DD",
 	timeFormat: "HH:mm",
+	debugMode: false,
 };
 
 /* ================================================================
@@ -46,24 +49,31 @@ function sleep(ms: number): Promise<void> {
    Frontmatter / Body Parsing
    ================================================================ */
 
-const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---/;
+// More flexible regex: handles various line endings and optional trailing newline
+const FM_RE = /^---[ \t]*[\r\n]+([\s\S]*?)[\r\n]+---[ \t]*(?:[\r\n]+|$)/;
 
 function splitFrontmatterAndBody(content: string): {
 	frontmatter: Record<string, unknown>;
 	body: string;
 	rawFmBlock: string;
 } {
-	const m = content.match(FM_RE);
+	// Normalize line endings for consistent parsing
+	const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+	const m = normalized.match(FM_RE);
 	if (!m) return { frontmatter: {}, body: content.trim(), rawFmBlock: "" };
 	let fm: Record<string, unknown> = {};
 	try {
-		fm = (parseYaml(m[1]) as Record<string, unknown>) ?? {};
-	} catch {
+		const parsed = parseYaml(m[1]);
+		fm = (typeof parsed === "object" && parsed !== null) 
+			? (parsed as Record<string, unknown>) 
+			: {};
+	} catch (e) {
+		console.warn("Modular Templates: Failed to parse frontmatter YAML:", e);
 		fm = {};
 	}
 	return {
 		frontmatter: fm,
-		body: content.slice(m[0].length).replace(/^\r?\n+/, ""),
+		body: normalized.slice(m[0].length).trim(),
 		rawFmBlock: m[0],
 	};
 }
@@ -73,9 +83,19 @@ function splitFrontmatterAndBody(content: string): {
    ================================================================ */
 
 function parseIncludes(value: unknown): string[] {
-	if (Array.isArray(value)) return value.map(String).map(cleanInclude);
+	if (value === undefined || value === null) return [];
+	
+	if (Array.isArray(value)) {
+		return value
+			.map(String)
+			.map(cleanInclude)
+			.filter(Boolean);
+	}
+	
 	if (typeof value === "string") {
 		const t = value.trim();
+		if (!t) return [];
+		
 		// Handle "[a, b]" stored as string by some YAML parsers
 		if (t.startsWith("[") && t.endsWith("]")) {
 			return t
@@ -91,16 +111,26 @@ function parseIncludes(value: unknown): string[] {
 				.map((s) => cleanInclude(s.trim()))
 				.filter(Boolean);
 		}
-		return t ? [cleanInclude(t)] : [];
+		return [cleanInclude(t)];
 	}
+	
+	// Handle numbers or other types that got parsed oddly
 	return [];
 }
 
-/** Strip wikilink brackets and .md extension from include names. */
+/** Strip wikilink brackets, quotes, and .md extension from include names. */
 function cleanInclude(name: string): string {
+	if (!name) return "";
 	return name
+		.trim()
+		// Remove surrounding quotes (single or double)
+		.replace(/^["']|["']$/g, "")
+		// Remove wikilink brackets [[...]]
 		.replace(/^\[\[/, "")
 		.replace(/\]\]$/, "")
+		// Remove embed syntax ![[...]]
+		.replace(/^!\[\[/, "")
+		// Remove .md extension
 		.replace(/\.md$/i, "")
 		.trim();
 }
@@ -115,19 +145,26 @@ function processVars(
 	dateFmt: string,
 	timeFmt: string,
 ): string {
-	const now = (window as any).moment();
-	return text
-		.replace(
-			/\{\{\s*date\s*:\s*([^}]+)\s*\}\}/gi,
-			(_, f: string) => now.format(f.trim()),
-		)
-		.replace(
-			/\{\{\s*time\s*:\s*([^}]+)\s*\}\}/gi,
-			(_, f: string) => now.format(f.trim()),
-		)
-		.replace(/\{\{\s*date\s*\}\}/gi, now.format(dateFmt))
-		.replace(/\{\{\s*time\s*\}\}/gi, now.format(timeFmt))
-		.replace(/\{\{\s*title\s*\}\}/gi, title);
+	if (!text) return text;
+	
+	try {
+		const now = moment();
+		return text
+			.replace(
+				/\{\{\s*date\s*:\s*([^}]+)\s*\}\}/gi,
+				(_, f: string) => now.format(f.trim()),
+			)
+			.replace(
+				/\{\{\s*time\s*:\s*([^}]+)\s*\}\}/gi,
+				(_, f: string) => now.format(f.trim()),
+			)
+			.replace(/\{\{\s*date\s*\}\}/gi, now.format(dateFmt))
+			.replace(/\{\{\s*time\s*\}\}/gi, now.format(timeFmt))
+			.replace(/\{\{\s*title\s*\}\}/gi, title);
+	} catch (e) {
+		console.error("Modular Templates: Error processing template variables:", e);
+		return text;
+	}
 }
 
 function processVarsFm(
@@ -373,31 +410,77 @@ async function resolveTemplate(
 	strategy: MergeStrategy,
 	ancestors: Set<string>,
 	cache: Map<string, Resolved>,
+	debug = false,
 ): Promise<Resolved> {
+	if (debug) console.log(`Modular Templates: Resolving ${path}`);
+	
 	// True cycle detection: only ancestors on the current stack
 	if (ancestors.has(path)) {
 		new Notice(`⚠️ Cycle detected: ${path}`);
+		console.warn(`Modular Templates: Cycle detected at ${path}`);
 		return { frontmatter: {}, body: "" };
 	}
 	// Diamond-dependency caching
-	if (cache.has(path)) return cache.get(path)!;
+	if (cache.has(path)) {
+		if (debug) console.log(`Modular Templates: Using cached result for ${path}`);
+		return cache.get(path)!;
+	}
 
 	ancestors.add(path);
 
 	const file = app.vault.getAbstractFileByPath(path);
 	if (!(file instanceof TFile)) {
-		new Notice(`Template not found: ${path}`);
+		// Try alternative path constructions
+		const altPaths = [
+			path,
+			`${folder}/${path}`,
+			path.replace(/\.md$/, "") + ".md",
+			`${folder}/${path.replace(/\.md$/, "")}.md`,
+		];
+		
+		let foundFile: TFile | null = null;
+		for (const altPath of altPaths) {
+			const f = app.vault.getAbstractFileByPath(altPath);
+			if (f instanceof TFile) {
+				foundFile = f;
+				if (debug) console.log(`Modular Templates: Found at alternative path ${altPath}`);
+				break;
+			}
+		}
+		
+		if (!foundFile) {
+			new Notice(`Template not found: ${path}`);
+			console.warn(`Modular Templates: Template not found: ${path}. Tried: ${altPaths.join(", ")}`);
+			ancestors.delete(path);
+			return { frontmatter: {}, body: "" };
+		}
+	}
+
+	const actualFile = (file instanceof TFile) 
+		? file 
+		: app.vault.getAbstractFileByPath(path) as TFile;
+	
+	if (!(actualFile instanceof TFile)) {
 		ancestors.delete(path);
 		return { frontmatter: {}, body: "" };
 	}
 
-	const raw = await app.vault.cachedRead(file);
+	const raw = await app.vault.cachedRead(actualFile);
+	if (debug) console.log(`Modular Templates: Raw content length: ${raw.length}`);
+	
 	const { frontmatter, body } = splitFrontmatterAndBody(raw);
+	if (debug) {
+		console.log(`Modular Templates: Parsed frontmatter keys: ${Object.keys(frontmatter).join(", ")}`);
+		console.log(`Modular Templates: Body length: ${body.length}`);
+	}
 
 	// Resolve includes (support both "includes" and "include")
-	const rawIncludes =
-		frontmatter["includes"] ?? frontmatter["include"];
+	const rawIncludes = frontmatter["includes"] ?? frontmatter["include"];
 	const includes = parseIncludes(rawIncludes);
+	
+	if (debug && includes.length > 0) {
+		console.log(`Modular Templates: Includes to resolve: ${includes.join(", ")}`);
+	}
 
 	let mFm: Record<string, unknown> = {};
 	let mBody = "";
@@ -405,8 +488,10 @@ async function resolveTemplate(
 	for (const inc of includes) {
 		let p = inc;
 		if (!p.endsWith(".md")) p += ".md";
-		if (!p.contains("/")) p = `${folder}/${p}`;
+		if (!p.includes("/")) p = `${folder}/${p}`;
 
+		if (debug) console.log(`Modular Templates: Resolving include: ${p}`);
+		
 		const parent = await resolveTemplate(
 			app,
 			p,
@@ -414,6 +499,7 @@ async function resolveTemplate(
 			strategy,
 			ancestors,
 			cache,
+			debug,
 		);
 		mFm = mergeFrontmatter(mFm, parent.frontmatter, strategy);
 		mBody = mergeBodies(mBody, parent.body, strategy);
@@ -426,6 +512,11 @@ async function resolveTemplate(
 	ancestors.delete(path);
 	const result: Resolved = { frontmatter: mFm, body: mBody };
 	cache.set(path, result);
+	
+	if (debug) {
+		console.log(`Modular Templates: Final resolved frontmatter keys: ${Object.keys(mFm).join(", ")}`);
+	}
+	
 	return result;
 }
 
@@ -451,7 +542,9 @@ async function applyToNote(
 ): Promise<void> {
 	const { app, settings } = plugin;
 	const strategy = settings.mergeStrategy;
+	const debug = settings.debugMode;
 	const view = app.workspace.getActiveViewOfType(MarkdownView);
+	
 	if (!view?.file) {
 		new Notice("No active markdown note");
 		return;
@@ -459,6 +552,12 @@ async function applyToNote(
 	const file = view.file;
 	const editor = view.editor;
 	const title = file.basename;
+
+	if (debug) {
+		console.log(`Modular Templates: Applying to note "${title}" in ${mode} mode`);
+		console.log(`Modular Templates: Raw frontmatter keys: ${Object.keys(rawFm).join(", ")}`);
+		console.log(`Modular Templates: Raw body length: ${rawBody.length}`);
+	}
 
 	// Process template variables
 	const fm = processVarsFm(
@@ -474,6 +573,11 @@ async function applyToNote(
 		settings.timeFormat,
 	);
 
+	if (debug) {
+		console.log(`Modular Templates: Processed frontmatter:`, fm);
+		console.log(`Modular Templates: Processed body preview: ${body.slice(0, 100)}...`);
+	}
+
 	if (mode === "insert") {
 		/*  INSERT mode  –  like core Templates:
 		 *  • frontmatter → merged into note properties via processFrontMatter
@@ -483,17 +587,30 @@ async function applyToNote(
 		// 1) Insert body at cursor FIRST (before frontmatter changes shift lines)
 		if (body.trim()) {
 			editor.replaceSelection(body + "\n");
+			if (debug) console.log("Modular Templates: Body inserted at cursor");
 		}
 
 		// 2) Merge frontmatter via Obsidian's processFrontMatter
 		//    (preserves property types: dates, links, lists, etc.)
 		if (Object.keys(fm).length > 0) {
-			await app.fileManager.processFrontMatter(
-				file,
-				(existing: Record<string, unknown>) => {
-					applyFmMergeInPlace(existing, fm, strategy);
-				},
-			);
+			try {
+				await app.fileManager.processFrontMatter(
+					file,
+					(existing: Record<string, unknown>) => {
+						if (debug) {
+							console.log("Modular Templates: Existing frontmatter:", existing);
+						}
+						applyFmMergeInPlace(existing, fm, strategy);
+						if (debug) {
+							console.log("Modular Templates: Merged frontmatter:", existing);
+						}
+					},
+				);
+				if (debug) console.log("Modular Templates: Frontmatter processed successfully");
+			} catch (e) {
+				console.error("Modular Templates: Error processing frontmatter:", e);
+				new Notice("⚠️ Error merging frontmatter - see console for details");
+			}
 		}
 	} else {
 		/*  MERGE mode  –  section-aware:
@@ -508,6 +625,12 @@ async function applyToNote(
 			strategy,
 		);
 		const mergedBody = mergeBodies(existing.body, body, strategy);
+		
+		if (debug) {
+			console.log("Modular Templates: Merged frontmatter:", mergedFm);
+			console.log("Modular Templates: Merged body length:", mergedBody.length);
+		}
+		
 		await app.vault.modify(file, buildOutput(mergedFm, mergedBody));
 	}
 
@@ -542,6 +665,53 @@ class TemplateSuggestModal extends FuzzySuggestModal<TFile> {
 	}
 	onChooseItem(item: TFile): void {
 		this.onChoose(item);
+	}
+}
+
+/** Preview modal to show resolved template content. */
+class PreviewModal extends Modal {
+	private templateName: string;
+	private content: string;
+
+	constructor(app: App, templateName: string, content: string) {
+		super(app);
+		this.templateName = templateName;
+		this.content = content;
+	}
+
+	onOpen() {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass("mt-preview");
+
+		contentEl.createEl("h3", { 
+			text: `Preview: ${this.templateName}` 
+		});
+		
+		contentEl.createEl("p", {
+			text: "This is what the template resolves to (before variable substitution):",
+			cls: "mt-preview-hint",
+		});
+
+		const pre = contentEl.createEl("pre", { cls: "mt-preview-content" });
+		pre.createEl("code", { text: this.content });
+
+		const footer = contentEl.createDiv({ cls: "mt-footer" });
+		const copyBtn = footer.createEl("button", { 
+			text: "Copy to clipboard",
+			cls: "mod-cta",
+		});
+		copyBtn.addEventListener("click", () => {
+			navigator.clipboard.writeText(this.content);
+			new Notice("Copied to clipboard");
+		});
+		
+		const closeBtn = footer.createEl("button", { text: "Close" });
+		closeBtn.addEventListener("click", () => this.close());
+	}
+
+	onClose() {
+		this.contentEl.empty();
 	}
 }
 
@@ -673,6 +843,9 @@ export default class ModularTemplatesPlugin extends Plugin {
 					this.app,
 					templates,
 					async (file) => {
+						if (this.settings.debugMode) {
+							console.log(`Modular Templates: Selected template: ${file.path}`);
+						}
 						const res = await resolveTemplate(
 							this.app,
 							file.path,
@@ -680,6 +853,7 @@ export default class ModularTemplatesPlugin extends Plugin {
 							this.settings.mergeStrategy,
 							new Set(),
 							new Map(),
+							this.settings.debugMode,
 						);
 						await applyToNote(
 							this,
@@ -709,6 +883,9 @@ export default class ModularTemplatesPlugin extends Plugin {
 					this.app,
 					templates,
 					async (file) => {
+						if (this.settings.debugMode) {
+							console.log(`Modular Templates: Selected template: ${file.path}`);
+						}
 						const res = await resolveTemplate(
 							this.app,
 							file.path,
@@ -716,6 +893,7 @@ export default class ModularTemplatesPlugin extends Plugin {
 							this.settings.mergeStrategy,
 							new Set(),
 							new Map(),
+							this.settings.debugMode,
 						);
 						await applyToNote(
 							this,
@@ -745,6 +923,9 @@ export default class ModularTemplatesPlugin extends Plugin {
 					this,
 					templates,
 					async (files) => {
+						if (this.settings.debugMode) {
+							console.log(`Modular Templates: Selected ${files.length} templates`);
+						}
 						const cache = new Map<string, Resolved>();
 						let combinedFm: Record<string, unknown> = {};
 						let combinedBody = "";
@@ -758,6 +939,7 @@ export default class ModularTemplatesPlugin extends Plugin {
 								strategy,
 								new Set(),
 								cache,
+								this.settings.debugMode,
 							);
 							combinedFm = mergeFrontmatter(
 								combinedFm,
@@ -798,6 +980,9 @@ export default class ModularTemplatesPlugin extends Plugin {
 					this.app,
 					templates,
 					async (file) => {
+						if (this.settings.debugMode) {
+							console.log(`Modular Templates: Creating note from template: ${file.path}`);
+						}
 						const res = await resolveTemplate(
 							this.app,
 							file.path,
@@ -805,6 +990,7 @@ export default class ModularTemplatesPlugin extends Plugin {
 							this.settings.mergeStrategy,
 							new Set(),
 							new Map(),
+							this.settings.debugMode,
 						);
 						const baseName = `Untitled - ${file.basename}`;
 						let path = `${baseName}.md`;
@@ -828,12 +1014,55 @@ export default class ModularTemplatesPlugin extends Plugin {
 							this.settings.timeFormat,
 						);
 						const content = buildOutput(fm, body);
+						
+						if (this.settings.debugMode) {
+							console.log(`Modular Templates: Creating note at ${path}`);
+							console.log(`Modular Templates: Content preview: ${content.slice(0, 200)}...`);
+						}
+						
 						const newFile =
 							await this.app.vault.create(path, content);
 						await this.app.workspace
 							.getLeaf(true)
 							.openFile(newFile);
 						new Notice("✅ Note created from template");
+					},
+				).open();
+			},
+		});
+
+		// ── Command 5: Preview resolved template ──────────────────────
+		// Shows what a template will resolve to without applying it.
+		this.addCommand({
+			id: "preview-modular-template",
+			name: "Preview resolved template",
+			callback: () => {
+				const templates = this.getTemplateFiles();
+				if (!templates.length) {
+					new Notice(
+						"No templates in " + this.settings.templatesFolder,
+					);
+					return;
+				}
+				new TemplateSuggestModal(
+					this.app,
+					templates,
+					async (file) => {
+						const res = await resolveTemplate(
+							this.app,
+							file.path,
+							this.settings.templatesFolder,
+							this.settings.mergeStrategy,
+							new Set(),
+							new Map(),
+							true, // Always debug for preview
+						);
+						const title = "{{title}}"; // Keep as placeholder for preview
+						const fm = res.frontmatter;
+						const body = res.body;
+						const content = buildOutput(fm, body);
+						
+						new PreviewModal(this.app, file.basename, content).open();
 					},
 				).open();
 			},
@@ -1003,6 +1232,21 @@ class ModularTemplatesSettingTab extends PluginSettingTab {
 					.onChange(async (v) => {
 						this.plugin.settings.timeFormat =
 							v.trim() || "HH:mm";
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName("Debug mode")
+			.setDesc(
+				"Log detailed information to the developer console. " +
+					"Useful for troubleshooting template resolution issues.",
+			)
+			.addToggle((t) =>
+				t
+					.setValue(this.plugin.settings.debugMode)
+					.onChange(async (v) => {
+						this.plugin.settings.debugMode = v;
 						await this.plugin.saveSettings();
 					}),
 			);

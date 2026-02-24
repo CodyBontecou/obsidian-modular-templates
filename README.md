@@ -20,6 +20,7 @@ An Obsidian plugin for composable, modular templates with inheritance. Define at
 | **Merge modular template into note** | Pick one template → merges frontmatter AND body sections (heading-aware dedup). Safe to run multiple times. |
 | **Insert multiple modular templates** | Multi-select with checkboxes → resolves each, merges all together, then applies (section-aware). |
 | **Create note from modular template** | Pick one template → creates a brand-new note with fully resolved content. |
+| **Preview resolved template** | Pick a template → see the fully resolved output (with all includes merged) before applying. Useful for debugging. |
 
 ## Settings
 
@@ -29,6 +30,7 @@ An Obsidian plugin for composable, modular templates with inheritance. Define at
 | Merge strategy | `last-wins` | `last-wins` (child overrides parent), `first-wins` (parent preserved), or `append` (strings concatenated, sections combined). |
 | Date format | `YYYY-MM-DD` | Moment.js format for `{{date}}`. Inherited from core Templates on first run. |
 | Time format | `HH:mm` | Moment.js format for `{{time}}`. Inherited from core Templates on first run. |
+| Debug mode | `false` | Log detailed information to the developer console (Ctrl/Cmd+Shift+I). |
 
 ## Usage
 
@@ -141,6 +143,40 @@ For **arrays** (like `tags`), values are always concatenated and deduplicated re
 | Section-aware body merge | ❌ (append only) | ✅ Headings are deduplicated |
 | Merge into existing note safely | ❌ | ✅ "Merge" command |
 | Frontmatter property types | ✅ | ✅ (uses `processFrontMatter` API) |
+
+## Troubleshooting
+
+### Template variables like `{{date}}` aren't being replaced
+
+1. Make sure you're using the **Modular Templates** commands (not core Templates)
+2. Check your date/time format settings match what you expect
+3. Enable **Debug mode** in settings and check the developer console (Ctrl/Cmd+Shift+I)
+
+### Includes aren't being resolved
+
+1. Check that the included template exists in your templates folder
+2. Template names in `includes` should NOT have the `.md` extension (it's added automatically)
+3. Use the **Preview resolved template** command to see what the plugin resolves to
+4. Enable **Debug mode** — the console will show exactly which files are being looked for
+
+### "Template not found" errors
+
+The plugin looks for templates in your configured templates folder. Make sure:
+- The folder path in settings matches your actual folder name (case-sensitive on some systems)
+- The template file exists with a `.md` extension
+
+### Include syntax examples that work
+
+```yaml
+# These all work:
+includes: [base, book]
+includes: base, book
+includes:
+  - base
+  - book
+includes: "[[base]]"
+include: base  # singular form also works
+```
 
 ## Installation
 

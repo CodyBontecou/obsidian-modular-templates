@@ -1,7 +1,7 @@
 {
   "id": "modular-templates",
   "name": "Modular Templates",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "minAppVersion": "1.1.0",
   "description": "Composable templates with frontmatter includes, recursive merging, variable resolution ({{date}}, {{time}}, {{title}}), and multi-template insertion.",
   "author": "Cody Bontecou",
